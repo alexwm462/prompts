@@ -1,0 +1,10 @@
+one script to set up the project
+    - 
+
+
+bash script rules
+    - idempotency
+    - no exit 1 statements - should be able to be pasted into the terminal directly
+    - if the user hasn't input something, ask for it and try again
+    - where possible do things completely automated. where not possible, ask for user input
+    - 

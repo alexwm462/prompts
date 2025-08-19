@@ -11,10 +11,12 @@
 #    - GITHUB_TOKEN (Personal Access Token with 'repo' scope)
 #    - NETLIFY_AUTH_TOKEN (Personal Access Token)
 #    - NETLIFY_ACCOUNT_ID (Your Netlify team slug, e.g., "alexwm462")
-#    - SUPABASE_URL (For the 'main' branch/production)
-#    - SUPABASE_ANON_KEY (For the 'main' branch/production)
+#    - SUPABASE_PROD_URL (For the 'main' branch/production)
+#    - SUPABASE_PROD_ANON_KEY (For the 'main' branch/production)
+#    - SUPABASE_PROD_SERVICE_ROLE_KEY (For the 'main' branch/production)
 #    - SUPABASE_DEV_URL (For the 'develop' branch)
 #    - SUPABASE_DEV_ANON_KEY (For the 'develop' branch)
+#    - SUPABASE_DEV_SERVICE_ROLE_KEY (For the 'develop' branch)
 
 # --- Configuration and Pre-flight Checks ---
 
@@ -38,7 +40,15 @@ else
 fi
 
 # Check if required tokens and keys are set
-if [ -z "$GITHUB_TOKEN" ] || [ -z "$NETLIFY_AUTH_TOKEN" ] || [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ] || [ -z "$SUPABASE_DEV_URL" ] || [ -z "$SUPABASE_DEV_ANON_KEY" ] || [ -z "$NETLIFY_ACCOUNT_ID" ]; then
+if [ -z "$GITHUB_TOKEN" ] || \
+   [ -z "$NETLIFY_AUTH_TOKEN" ] || \
+   [ -z "$NETLIFY_ACCOUNT_ID" ] || \
+   [ -z "$SUPABASE_PROD_URL" ] || \
+   [ -z "$SUPABASE_PROD_ANON_KEY" ] || \
+   [ -z "$SUPABASE_PROD_SERVICE_ROLE_KEY" ] || \
+   [ -z "$SUPABASE_DEV_URL" ] || \
+   [ -z "$SUPABASE_DEV_ANON_KEY" ] || \
+   [ -z "$SUPABASE_DEV_SERVICE_ROLE_KEY" ]; then
     echo -e "${RED}Error: One or more required environment variables are not set in the .env file.${NC}"
     exit 1
 fi
@@ -138,7 +148,7 @@ else
         exit 1
     fi
     echo -e "${GREEN}✔ Netlify site created and linked to the GitHub repo.${NC}"
-    
+
     NETLIFY_SITE_ID=$(netlify status --json | jq -r '.siteData."site-id"')
     echo "Setting up branch deploys for site ID: $NETLIFY_SITE_ID"
     netlify api updateSite --data "{\"site_id\": \"$NETLIFY_SITE_ID\",\"body\": {\"build_settings\": {\"allowed_branches\": []}}}" > /dev/null 2>&1
@@ -153,19 +163,25 @@ fi
 
 echo -e "\n${GREEN}Step 5: Setting environment variables on Netlify...${NC}"
 # These commands are idempotent; they will create or update the variables.
+# Note that we map the specific variables from our .env file (e.g., SUPABASE_PROD_URL)
+# to more generic names in the Netlify build environment (e.g., SUPABASE_URL).
+# This allows the application code to remain consistent across environments.
 
 echo "Setting production variables (for 'main' branch)..."
-netlify env:set SUPABASE_URL "$SUPABASE_URL"
-netlify env:set SUPABASE_ANON_KEY "$SUPABASE_ANON_KEY"
+netlify env:set SUPABASE_URL "$SUPABASE_PROD_URL"
+netlify env:set SUPABASE_ANON_KEY "$SUPABASE_PROD_ANON_KEY"
+netlify env:set SUPABASE_SERVICE_ROLE_KEY "$SUPABASE_PROD_SERVICE_ROLE_KEY"
 
 echo "Setting variables for 'develop' branch context..."
 # Use 'yes' to automatically confirm overwriting if the variables already exist.
 yes | netlify env:set SUPABASE_URL "$SUPABASE_DEV_URL" --context develop
 yes | netlify env:set SUPABASE_ANON_KEY "$SUPABASE_DEV_ANON_KEY" --context develop
+yes | netlify env:set SUPABASE_SERVICE_ROLE_KEY "$SUPABASE_DEV_SERVICE_ROLE_KEY" --context develop
 
 echo "Setting variables for branch deploys..."
 yes | netlify env:set SUPABASE_URL "$SUPABASE_DEV_URL" --context branch-deploy
 yes | netlify env:set SUPABASE_ANON_KEY "$SUPABASE_DEV_ANON_KEY" --context branch-deploy
+yes | netlify env:set SUPABASE_SERVICE_ROLE_KEY "$SUPABASE_DEV_SERVICE_ROLE_KEY" --context branch-deploy
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}Error: Failed to set one or more environment variables on Netlify.${NC}"

@@ -2,7 +2,7 @@ one script to set up the project
     - 
 
 create_ptoject.sh script
-    - add a snippet injection into the head of the SUPABASE_URL and SUPABASE_ANON_KEY
+    - 
 
 bash script rules
     - idempotency
@@ -13,9 +13,11 @@ bash script rules
 
 netlify serverless functions
     - add detailed logging to each functions
+    - SUPABASE_SERVICE_ROLE_KEY is stored in netlify cloud
 
 supabase migrations
     - prefix any table that you make with the project_name
 
 script.js
-    - get netlify to inject any env vars into the code. This required 
+    - hard code the SUPABASE_URL and SUPABASE_ANON_KEY in this script, as they are safe to be public
+    - be careful with character escaping

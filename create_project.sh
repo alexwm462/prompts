@@ -7,7 +7,8 @@
 # Prerequisites:
 # 1. GitHub CLI ('gh') installed and authenticated.
 # 2. Netlify CLI ('netlify') installed, authenticated, and up-to-date.
-# 3. A '.env' file in the same directory as this script with:
+# 3. JQ ('jq') command-line JSON processor installed.
+# 4. A '.env' file in the same directory as this script with:
 #    - GITHUB_TOKEN (Personal Access Token with 'repo' scope)
 #    - NETLIFY_AUTH_TOKEN (Personal Access Token)
 #    - NETLIFY_ACCOUNT_ID (Your Netlify team slug, e.g., "alexwm462")
@@ -18,7 +19,7 @@
 #    - SUPABASE_DEV_ANON_KEY (For the 'develop' branch)
 #    - SUPABASE_DEV_SERVICE_ROLE_KEY (For the 'develop' branch)
 
-# --- Configuration and Pre-flight Checks ---
+# --- Configuration and Global Variables ---
 
 # Set colors for output messages
 GREEN='\033[0;32m'
@@ -26,174 +27,233 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}Starting the project setup process...${NC}"
+# Global variables to be populated by functions
+PROJECT_NAME=""
+GH_USERNAME=""
+NETLIFY_SITE_NAME=""
 
-# Check if .env file exists and source it
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-else
-    echo -e "${RED}Error: '.env' file not found.${NC}"
-    echo -e "${YELLOW}Please create a .env file with the required variables.${NC}"
-    exit 1
-fi
+# --- Function Definitions ---
 
-# Check if required tokens and keys are set
-if [ -z "$GITHUB_TOKEN" ] || \
-   [ -z "$NETLIFY_AUTH_TOKEN" ] || \
-   [ -z "$NETLIFY_ACCOUNT_ID" ] || \
-   [ -z "$SUPABASE_PROD_URL" ] || \
-   [ -z "$SUPABASE_PROD_ANON_KEY" ] || \
-   [ -z "$SUPABASE_PROD_SERVICE_ROLE_KEY" ] || \
-   [ -z "$SUPABASE_DEV_URL" ] || \
-   [ -z "$SUPABASE_DEV_ANON_KEY" ] || \
-   [ -z "$SUPABASE_DEV_SERVICE_ROLE_KEY" ]; then
-    echo -e "${RED}Error: One or more required environment variables are not set in the .env file.${NC}"
-    exit 1
-fi
+##
+# Checks for required command-line tools and environment variables.
+##
+check_prerequisites() {
+    echo -e "${GREEN}Performing pre-flight checks...${NC}"
 
-# --- User Input ---
+    # Check for required commands
+    for cmd in gh netlify jq; do
+        if ! command -v "$cmd" &> /dev/null; then
+            echo -e "${RED}Error: Required command '$cmd' is not installed.${NC}" >&2
+            exit 1
+        fi
+    done
 
-read -p "Enter the name for your new project: " PROJECT_NAME
-
-if [ -z "$PROJECT_NAME" ]; then
-    echo -e "${RED}Error: Project name cannot be empty.${NC}"
-    exit 1
-fi
-
-# --- Project Directory and Git Initialization ---
-
-# Idempotency Check: Check if directory exists
-if [ -d "$PROJECT_NAME" ]; then
-    echo -e "${YELLOW}Directory '$PROJECT_NAME' already exists. Proceeding inside it.${NC}"
-    cd "$PROJECT_NAME"
-else
-    echo -e "\n${GREEN}Step 1: Creating project directory and initializing Git...${NC}"
-    mkdir "$PROJECT_NAME"
-    cd "$PROJECT_NAME"
-    git init -b main
-    echo "# $PROJECT_NAME" > README.md
-    git add README.md
-    git commit -m "Initial commit"
-    echo -e "${GREEN}✔ Git repository initialized locally.${NC}"
-fi
-
-# --- GitHub Repository Creation ---
-
-echo -e "\n${GREEN}Step 2: Checking/Creating GitHub repository...${NC}"
-GH_USERNAME=$(gh api user -q .login)
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to authenticate with GitHub. Is your GITHUB_TOKEN valid?${NC}"
-    exit 1
-fi
-
-# Idempotency Check: Check if GitHub repo already exists
-if gh repo view "$GH_USERNAME/$PROJECT_NAME" >/dev/null 2>&1; then
-    echo -e "${YELLOW}GitHub repository '$GH_USERNAME/$PROJECT_NAME' already exists. Skipping creation.${NC}"
-    # Ensure the git remote is set correctly
-    git remote add origin "https://github.com/$GH_USERNAME/$PROJECT_NAME.git" 2>/dev/null || git remote set-url origin "https://github.com/$GH_USERNAME/$PROJECT_NAME.git"
-    git push origin main
-else
-    echo -e "${GREEN}Creating new GitHub repository...${NC}"
-    gh repo create "$PROJECT_NAME" --private --source=. --push
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Error: Failed to create GitHub repository.${NC}"
+    # Check if .env file exists and source it
+    if [ -f .env ]; then
+        set -a
+        source .env
+        set +a
+    else
+        echo -e "${RED}Error: '.env' file not found.${NC}" >&2
+        echo -e "${YELLOW}Please create a .env file with the required variables.${NC}" >&2
         exit 1
     fi
-    echo -e "${GREEN}✔ Private GitHub repository created and initial commit pushed.${NC}"
-fi
 
-# --- Create and Push Develop Branch ---
-
-echo -e "\n${GREEN}Step 3: Creating and pushing the 'develop' branch...${NC}"
-
-# Idempotency Check: Create 'develop' branch if it doesn't exist locally
-if git show-ref --verify --quiet refs/heads/develop; then
-    echo -e "${YELLOW}Git branch 'develop' already exists locally. Skipping creation.${NC}"
-else
-    git checkout -b develop
-    echo -e "${GREEN}✔ Git branch 'develop' created.${NC}"
-fi
-
-# Push the develop branch to GitHub and set it to track the remote branch
-git push --set-upstream origin develop
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to push 'develop' branch to GitHub.${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✔ 'develop' branch pushed to GitHub.${NC}"
-
-# Switch back to the main branch for safety
-git checkout main
-
-# --- Netlify Site Creation and Configuration ---
-
-echo -e "\n${GREEN}Step 4: Checking/Creating Netlify site...${NC}"
-
-# Idempotency Check: See if a site is already linked to this directory
-NETLIFY_SITE_ID=$(netlify status --json | jq -r '.siteData."site-id"')
-
-if [ -n "$NETLIFY_SITE_ID" ]; then
-    echo -e "${YELLOW}A Netlify site is already linked to this directory (ID: $NETLIFY_SITE_ID). Skipping creation.${NC}"
-    SITE_INFO=$(netlify api getSite --data "{\"site_id\":\"$NETLIFY_SITE_ID\"}")
-    NETLIFY_SITE_NAME=$(echo "$SITE_INFO" | grep '"name":' | sed -e 's/.*"name": "\(.*\)".*/\1/')
-else
-    echo -e "${GREEN}Creating new Netlify site...${NC}"
-    NETLIFY_SITE_NAME="alexander-minchin-$PROJECT_NAME"
-    # The --with-ci flag links the repo and enables continuous deployment for all branches.
-    netlify sites:create --name "$NETLIFY_SITE_NAME" --with-ci --account-slug "$NETLIFY_ACCOUNT_ID"
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Error: Failed to create Netlify site. Please ensure your Netlify CLI is up-to-date ('npm install -g netlify-cli').${NC}"
+    # Check if required tokens and keys are set
+    if [ -z "$GITHUB_TOKEN" ] || \
+       [ -z "$NETLIFY_AUTH_TOKEN" ] || \
+       [ -z "$NETLIFY_ACCOUNT_ID" ] || \
+       [ -z "$SUPABASE_PROD_URL" ] || \
+       [ -z "$SUPABASE_PROD_ANON_KEY" ] || \
+       [ -z "$SUPABASE_PROD_SERVICE_ROLE_KEY" ] || \
+       [ -z "$SUPABASE_DEV_URL" ] || \
+       [ -z "$SUPABASE_DEV_ANON_KEY" ] || \
+       [ -z "$SUPABASE_DEV_SERVICE_ROLE_KEY" ]; then
+        echo -e "${RED}Error: One or more required environment variables are not set in the .env file.${NC}" >&2
         exit 1
     fi
-    echo -e "${GREEN}✔ Netlify site created and linked to the GitHub repo.${NC}"
+     echo -e "${GREEN}✔ Prerequisites met.${NC}"
+}
 
-    NETLIFY_SITE_ID=$(netlify status --json | jq -r '.siteData."site-id"')
-    echo "Setting up branch deploys for site ID: $NETLIFY_SITE_ID"
-    netlify api updateSite --data "{\"site_id\": \"$NETLIFY_SITE_ID\",\"body\": {\"build_settings\": {\"allowed_branches\": []}}}" > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Error: Failed to configure Netlify site for branch deploys.${NC}"
+##
+# Gets the project name from a command-line argument or an interactive prompt.
+# @param $1 - Optional project name argument.
+##
+get_project_name() {
+    PROJECT_NAME="${1:-}" # Use the first argument if it exists
+
+    if [ -z "$PROJECT_NAME" ]; then
+        read -p "Enter the name for your new project: " PROJECT_NAME
+    fi
+
+    if [ -z "$PROJECT_NAME" ]; then
+        echo -e "${RED}Error: Project name cannot be empty.${NC}" >&2
         exit 1
     fi
-    echo "🎉 Success! Project '$NETLIFY_SITE_NAME' is now configured to deploy all branches from Git."
-fi
+}
 
-# --- Set Netlify Environment Variables ---
+##
+# Creates the local project directory and initializes a Git repository.
+##
+setup_git_repo() {
+    # Idempotency Check: Check if directory exists
+    if [ -d "$PROJECT_NAME" ]; then
+        echo -e "${YELLOW}Directory '$PROJECT_NAME' already exists. Proceeding inside it.${NC}"
+        cd "$PROJECT_NAME"
+    else
+        echo -e "\n${GREEN}Step 1: Creating project directory and initializing Git...${NC}"
+        mkdir "$PROJECT_NAME"
+        cd "$PROJECT_NAME"
+        git init -b main
+        echo "# $PROJECT_NAME" > README.md
+        git add README.md
+        git commit -m "Initial commit"
+        echo -e "${GREEN}✔ Git repository initialized locally.${NC}"
+    fi
+}
 
-echo -e "\n${GREEN}Step 5: Setting environment variables on Netlify...${NC}"
-# These commands are idempotent; they will create or update the variables.
-# Note that we map the specific variables from our .env file (e.g., SUPABASE_PROD_URL)
-# to more generic names in the Netlify build environment (e.g., SUPABASE_URL).
-# This allows the application code to remain consistent across environments.
+##
+# Creates the GitHub repository and pushes the initial main and develop branches.
+##
+setup_github_repo() {
+    echo -e "\n${GREEN}Step 2: Checking/Creating GitHub repository...${NC}"
+    GH_USERNAME=$(gh api user -q .login)
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: Failed to authenticate with GitHub. Is your GITHUB_TOKEN valid?${NC}" >&2
+        exit 1
+    fi
 
-echo "Setting production variables (for 'main' branch)..."
-netlify env:set SUPABASE_URL "$SUPABASE_PROD_URL"
-netlify env:set SUPABASE_ANON_KEY "$SUPABASE_PROD_ANON_KEY"
-netlify env:set SUPABASE_SERVICE_ROLE_KEY "$SUPABASE_PROD_SERVICE_ROLE_KEY"
+    # Idempotency Check: Check if GitHub repo already exists
+    if gh repo view "$GH_USERNAME/$PROJECT_NAME" >/dev/null 2>&1; then
+        echo -e "${YELLOW}GitHub repository '$GH_USERNAME/$PROJECT_NAME' already exists. Skipping creation.${NC}"
+        # Ensure the git remote is set correctly
+        git remote add origin "https://github.com/$GH_USERNAME/$PROJECT_NAME.git" 2>/dev/null || git remote set-url origin "https://github.com/$GH_USERNAME/$PROJECT_NAME.git"
+        git push origin main
+    else
+        echo -e "${GREEN}Creating new GitHub repository...${NC}"
+        gh repo create "$PROJECT_NAME" --private --source=. --push
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}Error: Failed to create GitHub repository.${NC}" >&2
+            exit 1
+        fi
+        echo -e "${GREEN}✔ Private GitHub repository created and initial commit pushed.${NC}"
+    fi
 
-echo "Setting variables for 'develop' branch context..."
-# Use 'yes' to automatically confirm overwriting if the variables already exist.
-yes | netlify env:set SUPABASE_URL "$SUPABASE_DEV_URL" --context develop
-yes | netlify env:set SUPABASE_ANON_KEY "$SUPABASE_DEV_ANON_KEY" --context develop
-yes | netlify env:set SUPABASE_SERVICE_ROLE_KEY "$SUPABASE_DEV_SERVICE_ROLE_KEY" --context develop
+    echo -e "\n${GREEN}Step 3: Creating and pushing the 'develop' branch...${NC}"
 
-echo "Setting variables for branch deploys..."
-yes | netlify env:set SUPABASE_URL "$SUPABASE_DEV_URL" --context branch-deploy
-yes | netlify env:set SUPABASE_ANON_KEY "$SUPABASE_DEV_ANON_KEY" --context branch-deploy
-yes | netlify env:set SUPABASE_SERVICE_ROLE_KEY "$SUPABASE_DEV_SERVICE_ROLE_KEY" --context branch-deploy
+    # Idempotency Check: Create 'develop' branch if it doesn't exist locally
+    if git show-ref --verify --quiet refs/heads/develop; then
+        echo -e "${YELLOW}Git branch 'develop' already exists locally. Skipping creation.${NC}"
+    else
+        git checkout -b develop
+        echo -e "${GREEN}✔ Git branch 'develop' created.${NC}"
+    fi
 
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to set one or more environment variables on Netlify.${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✔ Supabase environment variables have been set for all contexts.${NC}"
+    # Push the develop branch to GitHub and set it to track the remote branch
+    git push --set-upstream origin develop
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: Failed to push 'develop' branch to GitHub.${NC}" >&2
+        exit 1
+    fi
+    echo -e "${GREEN}✔ 'develop' branch pushed to GitHub.${NC}"
 
-# --- Completion ---
+    # Switch back to the main branch for safety
+    git checkout main
+}
 
-echo -e "\n${GREEN}🎉 All done! Your project '$PROJECT_NAME' is ready.${NC}"
-echo -e "- Local folder: $(pwd)"
-echo -e "- GitHub Repo: https://github.com/$GH_USERNAME/$PROJECT_NAME"
-echo -e "- Netlify Site Console: https://app.netlify.com/sites/$NETLIFY_SITE_NAME/overview"
-echo -e "- Production URL (main): https://$NETLIFY_SITE_NAME.netlify.app"
-echo -e "- Develop URL: https://develop--$NETLIFY_SITE_NAME.netlify.app"
+##
+# Creates and configures the Netlify site, linking it to the GitHub repo.
+##
+setup_netlify_site() {
+    echo -e "\n${GREEN}Step 4: Checking/Creating Netlify site...${NC}"
+
+    # Idempotency Check: See if a site is already linked. Suppress errors if not linked.
+    local NETLIFY_SITE_ID
+    NETLIFY_SITE_ID=$(netlify status --json | jq -r '.siteData."site-id"' 2>/dev/null || echo "")
+
+    if [ -n "$NETLIFY_SITE_ID" ]; then
+        echo -e "${YELLOW}A Netlify site is already linked to this directory (ID: $NETLIFY_SITE_ID). Skipping creation.${NC}"
+        local SITE_INFO
+        SITE_INFO=$(netlify api getSite --data "{\"site_id\":\"$NETLIFY_SITE_ID\"}")
+        # IMPLEMENTED: Use jq for robust parsing instead of grep/sed
+        NETLIFY_SITE_NAME=$(echo "$SITE_INFO" | jq -r '.name')
+    else
+        echo -e "${GREEN}Creating netlify.toml configuration file...${NC}"
+        # IMPLEMENTED: Create the netlify.toml file before creating the site.
+        # Using a heredoc for clean multi-line output.
+cat > netlify.toml << EOF
+[build]
+  command = "# no build command"
+  functions = "netlify/functions"
+  publish = ""
+EOF
+        echo -e "${GREEN}Creating new Netlify site...${NC}"
+        NETLIFY_SITE_NAME="alexander-minchin-$PROJECT_NAME"
+        # The --with-ci flag links the repo and enables continuous deployment for all branches.
+        yes "" | netlify sites:create --name "$NETLIFY_SITE_NAME" --with-ci --account-slug "$NETLIFY_ACCOUNT_ID"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}Error: Failed to create Netlify site. Please ensure your Netlify CLI is up-to-date ('npm install -g netlify-cli').${NC}" >&2
+            exit 1
+        fi
+        echo -e "${GREEN}✔ Netlify site created and linked to the GitHub repo.${NC}"
+
+        NETLIFY_SITE_ID=$(netlify status --json | jq -r '.siteData."site-id"')
+        echo "Setting up branch deploys for site ID: $NETLIFY_SITE_ID"
+        netlify api updateSite --data "{\"site_id\": \"$NETLIFY_SITE_ID\",\"body\": {\"build_settings\": {\"allowed_branches\": []}}}" > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}Error: Failed to configure Netlify site for branch deploys.${NC}" >&2
+            exit 1
+        fi
+        echo "🎉 Success! Project '$NETLIFY_SITE_NAME' is now configured to deploy all branches from Git."
+    fi
+}
+
+##
+# Sets all required Supabase environment variables on Netlify for different contexts.
+##
+set_netlify_env_vars() {
+    echo -e "\n${GREEN}Step 5: Setting environment variables on Netlify...${NC}"
+
+    echo "Setting development variables..."
+    netlify env:set SUPABASE_URL "$SUPABASE_DEV_URL"
+    netlify env:set SUPABASE_ANON_KEY "$SUPABASE_DEV_ANON_KEY"
+    netlify env:set SUPABASE_SERVICE_ROLE_KEY "$SUPABASE_DEV_SERVICE_ROLE_KEY"
+
+    echo "Setting variables for production context..."
+    yes | netlify env:set SUPABASE_URL "$SUPABASE_PROD_URL" --context production
+    yes | netlify env:set SUPABASE_ANON_KEY "$SUPABASE_PROD_ANON_KEY" --context production
+    yes | netlify env:set SUPABASE_SERVICE_ROLE_KEY "$SUPABASE_PROD_SERVICE_ROLE_KEY" --context production
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: Failed to set one or more environment variables on Netlify.${NC}" >&2
+        exit 1
+    fi
+    echo -e "${GREEN}✔ Supabase environment variables have been set for all contexts.${NC}"
+}
+
+##
+# Prints a final summary with helpful links to the created resources.
+##
+print_summary() {
+    echo -e "\n${GREEN}🎉 All done! Your project '$PROJECT_NAME' is ready.${NC}"
+    echo -e "- Local folder: $(pwd)"
+    echo -e "- GitHub Repo: https://github.com/$GH_USERNAME/$PROJECT_NAME"
+    echo -e "- Netlify Site Console: https://app.netlify.com/sites/$NETLIFY_SITE_NAME/overview"
+    echo -e "- Production URL (main): https://$NETLIFY_SITE_NAME.netlify.app"
+    echo -e "- Develop URL: https://develop--$NETLIFY_SITE_NAME.netlify.app"
+}
+
+# --- Main Execution ---
+
+main() {
+    check_prerequisites
+    get_project_name "$@"
+    setup_git_repo
+    setup_github_repo
+    setup_netlify_site
+    set_netlify_env_vars
+    print_summary
+}
+
+# Execute the main function, passing along any command-line arguments
+main "$@"
